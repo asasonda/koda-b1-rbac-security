@@ -1,9 +1,12 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
+using System.Threading.RateLimiting;
 using KodaStore.Api.Middleware;
 using KodaStore.Application.Services;
 using KodaStore.Infrastructure;
 using KodaStore.Infrastructure.Identity;
+using KodaStore.Infrastructure.Seeding;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 
@@ -15,21 +18,7 @@ builder.Services.AddControllersWithViews();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
-// builder.Services.AddSingleton<InMemoryProductCatalog>();
 
-// builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>();
-// builder.Services.AddSingleton<IProductService, ProductService>();
-
-// Repository SQL Server
-// builder.Services.AddScoped<
-//     IProductRepository,
-//     SqlProductRepository>();
-
-// EFCORE REPOSITORY test
-// builder.Services.AddScoped<IProductRepository, EfProductRepository>();
-// builder.Services.AddScoped<IOrderRepository, EfOrderRepository>();
-// builder.Services.AddScoped<IProductQueryRepository, EfProductQueryRepository>();
-// builder.Services.AddScoped<ICategoryRepository, EfCategoryRepository>();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 var jwtOption = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? throw new InvalidOperationException("Konfiguration JWT belum tersedia");
@@ -64,8 +53,8 @@ if (signingKeyBytes.Length < 32)
 
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IOrderService,OrderService>();
-builder.Services.AddScoped<IProductQueryService, ProductQueryService>();
-builder.Services.AddScoped<ICategoryService, CategoryService>();
+// builder.Services.AddScoped<IProductQueryService, ProductQueryService>();
+// builder.Services.AddScoped<ICategoryService, CategoryService>();
 
 
 var allowedOrigins = builder.Configuration
@@ -78,7 +67,8 @@ builder.Services.AddCors(option =>
     {
         policy.WithOrigins(allowedOrigins)
         .AllowAnyHeader()
-        .AllowAnyMethod();
+        .AllowAnyMethod()
+        .AllowCredentials();
     });
 });
 
@@ -90,11 +80,51 @@ builder.Services.AddRateLimiter(option =>
         limiter.PermitLimit = 8;
         limiter.QueueLimit = 0;
     });
-    option.AddFixedWindowLimiter("LoginLimiter", limiter =>
+
+    option.AddPolicy("auth-login", context =>
     {
-        limiter.PermitLimit = 3;
-        limiter.Window = TimeSpan.FromMinutes(3);
-        limiter.QueueLimit = 0;
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "Nihil";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"login: {ip}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(3),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }
+        );
+    });
+
+    option.AddPolicy("auth-register", context =>
+    {
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "Nihil";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"register: {ip}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }
+        );
+    });
+
+    option.AddPolicy("auth-refresh", context =>
+    {
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "Nihil";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"refresh: {ip}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(2),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }
+        );
     });
 });
 
@@ -127,6 +157,11 @@ var app = builder.Build();
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
+    using var scope = app.Services.CreateAsyncScope();
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
+    var bootstrapAdminEmail = app.Configuration["RoleBootstrap:AdminEmail"];
+    await RoleSeedData.SeedAsync(roleManager, userManager, bootstrapAdminEmail);
     app.MapOpenApi();
 }
 else

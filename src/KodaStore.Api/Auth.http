@@ -5,12 +5,21 @@ POST {{base}}/api/v1/auth/register
 Content-Type: application/json
 
 {
-    "email": "hallo@gmail.com",
+    "email": "admin@gmail.com",
     "password": "Hallo123@@",
-    "displayName": "hallo world"
+    "displayName": "admin world"
 }
 
 ### Login
+POST {{base}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+    "email": "admin_hallo@gmail.com",
+    "password": "Hallo123@@"
+}
+
+###jw
 POST {{base}}/api/v1/auth/login
 Content-Type: application/json
 
